@@ -5,23 +5,17 @@ import { fileURLToPath } from "url";
 
 const router = express.Router();
 
-// ✅ 绝对路径计算
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ 确定根目录（项目主目录，而非子模块）
-const PROJECT_ROOT = path.resolve(__dirname); // 当前文件所在路径
+const PROJECT_ROOT = path.resolve(__dirname);
 const PY_SCRIPT = path.join(PROJECT_ROOT, "read_imerg.py");
 const DATA_DIR = path.join(PROJECT_ROOT, "data");
 
-// 打印一次调试路径
 console.log("✅ Project root:", PROJECT_ROOT);
 console.log("✅ Python script path:", PY_SCRIPT);
 console.log("✅ Data directory:", DATA_DIR);
 
-/**
- * 将输入的日期 + 时间 + 时区，转换为 NASA IMERG 文件命名格式
- */
 function formatIMERGDate(date, time, tzone) {
   const [year, month, day] = date.split("-").map(Number);
   const [hour, minute] = time.split(":").map(Number);
@@ -43,9 +37,7 @@ function formatIMERGDate(date, time, tzone) {
   return { utcMonth, utcDay, start, end, fileIndex };
 }
 
-/**
- * 主接口: 计算历史降水概率
- */
+
 router.post("/calculate_prob", async (req, res) => {
   try {
     const { coords, date, time, tzone } = req.body;
@@ -53,7 +45,7 @@ router.post("/calculate_prob", async (req, res) => {
       return res.status(400).json({ error: "Missing coords/date/time/tzone" });
     }
 
-    const [lon, lat] = coords;
+    const [lat, lon] = coords;
     const { utcMonth, utcDay, start, end, fileIndex } = formatIMERGDate(date, time, tzone);
 
     const baseName = `3B-HHR.MS.MRG.3IMERG`;
@@ -96,10 +88,26 @@ router.post("/calculate_prob", async (req, res) => {
     }
 
     const precipValues = results.map((r) => r.precip);
-    const avg = precipValues.reduce((a, b) => a + b, 0) / precipValues.length;
-    const rainProb = (precipValues.filter((v) => v > 0).length / precipValues.length) * 100;
-    const category =
-      avg === 0 ? "no rain" : avg < 1 ? "light rain" : avg < 5 ? "moderate rain" : "heavy rain";
+
+    const rainValues = precipValues.filter((v) => v > 0);
+    
+    const rainProb = (rainValues.length / precipValues.length) * 100;
+    
+    const avg = rainValues.length > 0
+      ? rainValues.reduce((a, b) => a + b, 0) / rainValues.length
+      : 0;
+    
+    let category;
+    if (avg === 0) {
+      category = "no rain";
+    } else if (avg < 2.5) {
+      category = "light rain";
+    } else if (avg < 10) {
+      category = "moderate rain";
+    } else {
+      category = "heavy rain";
+    }
+    
 
     res.json({
       location: `lat=${lat}, lon=${lon}`,
