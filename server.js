@@ -1,23 +1,20 @@
-import express from 'express';
-import { buildURLIndex } from './buildURLIndex.js';
-import { calcRouter } from './Calculations.js';
-import { pythonRouter } from './pythonRouter.js';  
-console.log("✅ pythonRouter successfully imported");
+import express from "express";
+import cors from "cors";
+import { calcRouter } from "./Calculations.js";
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
-const DATA_FILE = `./data/data.txt`;
-await buildURLIndex(DATA_FILE);
-
-// ✅ Mount your router under /api
-app.use('/api', calcRouter);
-app.use('/api', pythonRouter);
-app.get('/', (req, res) => {
-  res.send('Hello World!');
+app.get("/", (req, res) => {
+  res.send("✅ NASA Space Apps Backend is running");
 });
+
+// 主功能路由
+app.use("/api", calcRouter);
 
 const PORT = 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`🌎 Server running at http://localhost:${PORT}`);
 });
+

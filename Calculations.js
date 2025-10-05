@@ -1,135 +1,118 @@
 import express from "express";
-import fs from "fs";
-import { NetCDFReader } from "netcdfjs";
+import { spawn } from "child_process";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const router = express.Router();
 
+// ✅ 绝对路径计算
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ✅ 确定根目录（项目主目录，而非子模块）
+const PROJECT_ROOT = path.resolve(__dirname); // 当前文件所在路径
+const PY_SCRIPT = path.join(PROJECT_ROOT, "read_imerg.py");
+const DATA_DIR = path.join(PROJECT_ROOT, "data");
+
+// 打印一次调试路径
+console.log("✅ Project root:", PROJECT_ROOT);
+console.log("✅ Python script path:", PY_SCRIPT);
+console.log("✅ Data directory:", DATA_DIR);
+
 /**
- * Convert local date/time to NASA-style UTC file name format
- * Example output:
- * {
- *   formattedStart: 'S233000',
- *   formattedEnd: 'E235959',
- *   utcDateString: '20250531',
- *   fileIndex: '1410'
- * }
+ * 将输入的日期 + 时间 + 时区，转换为 NASA IMERG 文件命名格式
  */
-function formatTime(date, time, tzone) {
-  // Parse date and time into UTC (no timezone ambiguity)
+function formatIMERGDate(date, time, tzone) {
   const [year, month, day] = date.split("-").map(Number);
   const [hour, minute] = time.split(":").map(Number);
-  const localDate = new Date(Date.UTC(year, month - 1, day, hour, minute));
-
-  // Apply timezone offset (hours → minutes)
   const offsetMinutes = parseInt(tzone, 10) * 60;
-  const utcDate = new Date(localDate.getTime() - offsetMinutes * 60 * 1000);
 
-  // Get UTC hour & minute
-  let hours = utcDate.getUTCHours();
-  let minutes = utcDate.getUTCMinutes();
+  const local = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  const utc = new Date(local.getTime() - offsetMinutes * 60000);
 
-  // Each IMERG file covers a 30-minute block
-  const blockIndex = Math.floor(minutes / 30);
-  const blockStartMin = blockIndex * 30;
-  const blockEndMin = blockStartMin + 29;
-  const blockStartSec = 0;
-  const blockEndSec = 59;
+  const utcMonth = String(utc.getUTCMonth() + 1).padStart(2, "0");
+  const utcDay = String(utc.getUTCDate()).padStart(2, "0");
+  const utcHour = utc.getUTCHours();
+  const utcMinute = utc.getUTCMinutes();
 
-  // Compute end time (half an hour later, minus 1 sec)
-  let endHours = hours;
-  let endMinutes = blockEndMin;
-  if (blockEndMin >= 60) {
-    endHours += 1;
-    endMinutes -= 60;
-  }
+  const block = Math.floor(utcMinute / 30) * 30;
+  const start = `S${String(utcHour).padStart(2, "0")}${String(block).padStart(2, "0")}00`;
+  const end = `E${String(utcHour).padStart(2, "0")}${String(block + 29).padStart(2, "0")}59`;
+  const fileIndex = String(utcHour * 60 + block).padStart(4, "0");
 
-  // Format NASA-style time segments
-  const formattedStart = `S${hours.toString().padStart(2, "0")}${blockStartMin
-    .toString()
-    .padStart(2, "0")}${blockStartSec.toString().padStart(2, "0")}`;
-  const formattedEnd = `E${endHours.toString().padStart(2, "0")}${endMinutes
-    .toString()
-    .padStart(2, "0")}${blockEndSec.toString().padStart(2, "0")}`;
-
-  // File index code (e.g., .0000, .0030, .0060, ...)
-  const fileIndex = (hours * 60 + blockStartMin).toString().padStart(4, "0");
-
-  // UTC date in YYYYMMDD format for NASA filename
-  const utcDateString = utcDate.toISOString().slice(0, 10).replace(/-/g, "");
-
-  return { formattedStart, formattedEnd, utcDateString, fileIndex };
+  return { utcMonth, utcDay, start, end, fileIndex };
 }
 
 /**
- * ---- Route: /calculate_prob ----
- * Given a future date/time from frontend, return historical NASA IMERG filenames
- * covering the same month/day/time range for years 1999–2025.
+ * 主接口: 计算历史降水概率
  */
-router.get("/calculate_prob", (req, res) => {
+router.post("/calculate_prob", async (req, res) => {
   try {
-    const { coords, date, time, tzone } = req.query;
-
-    if (!date || !time || !tzone) {
-      return res
-        .status(400)
-        .json({ error: "Missing required parameters: date, time, tzone" });
+    const { coords, date, time, tzone } = req.body;
+    if (!coords || !date || !time || !tzone) {
+      return res.status(400).json({ error: "Missing coords/date/time/tzone" });
     }
 
-    // Extract the month & day from input date
-    const [inputYear, inputMonth, inputDay] = date.split("-").map(Number);
+    const [lon, lat] = coords;
+    const { utcMonth, utcDay, start, end, fileIndex } = formatIMERGDate(date, time, tzone);
 
+    const baseName = `3B-HHR.MS.MRG.3IMERG`;
+    const version = `V07B.HDF5`;
     const results = [];
 
-    // Loop through historical years 1999–2025
-    for (let year = 1998; year <= 2025; year++) {
-        // 🚫 Skip future data beyond 2025-05-31 (no data available yet)
-        if (year === 2025 && (inputMonth > 5 || (inputMonth === 5 && inputDay > 31))) continue;
-        const newDate = `${year}-${String(inputMonth).padStart(2, "0")}-${String(inputDay).padStart(2, "0")}`;      
+    for (let year = 1998; year <= 2024; year++) {
+      const filename = `${baseName}.${year}${utcMonth}${utcDay}-${start}-${end}.${fileIndex}.${version}`;
+      const filePath = path.join(DATA_DIR, filename);
 
-      const { formattedStart, formattedEnd, utcDateString, fileIndex } =
-        formatTime(newDate, time, tzone);
+      console.log(`🟢 Checking file: ${filePath}`);
 
-      // Compute day of year (DOY)
-      const doy =
-        Math.floor(
-          (new Date(
-            `${utcDateString.slice(0, 4)}-${utcDateString.slice(
-              4,
-              6
-            )}-${utcDateString.slice(6, 8)}`
-          ) -
-            new Date(`${year}-01-01`)) /
-            86400000
-        ) + 1;
+      const python = spawn("python3", [PY_SCRIPT, lat, lon, filePath]);
 
-      // Construct NASA data URL
-      const url = `https://data.gesdisc.earthdata.nasa.gov/data/GPM_L3/GPM_3IMERGHH.07/${year}/${doy
-        .toString()
-        .padStart(
-          3,
-          "0"
-        )}/3B-HHR.MS.MRG.3IMERG.${utcDateString}-${formattedStart}-${formattedEnd}.${fileIndex}.V07B.HDF5`;
+      let output = "";
+      let errorOutput = "";
 
-      results.push({
-        year,
-        url,
-      });
+      python.stdout.on("data", (data) => (output += data.toString()));
+      python.stderr.on("data", (data) => (errorOutput += data.toString()));
+
+      await new Promise((resolve) => python.on("close", resolve));
+
+      if (errorOutput.trim()) {
+        console.warn(`[WARN] Python stderr for ${year}:`, errorOutput.trim());
+      }
+
+      try {
+        const parsed = JSON.parse(output);
+        if (!isNaN(parsed.precip_mm_per_hr)) {
+          results.push({ year, precip: parsed.precip_mm_per_hr });
+          console.log(`✅ Year ${year} data: ${parsed.precip_mm_per_hr}`);
+        }
+      } catch {
+        console.warn(`[WARN] Invalid output for ${year}: ${output}`);
+      }
     }
 
-    // Send JSON response
+    if (results.length === 0) {
+      return res.json({ message: "No valid data found for this location/time" });
+    }
+
+    const precipValues = results.map((r) => r.precip);
+    const avg = precipValues.reduce((a, b) => a + b, 0) / precipValues.length;
+    const rainProb = (precipValues.filter((v) => v > 0).length / precipValues.length) * 100;
+    const category =
+      avg === 0 ? "no rain" : avg < 1 ? "light rain" : avg < 5 ? "moderate rain" : "heavy rain";
+
     res.json({
-      message: `Historical IMERG files for ${String(inputMonth).padStart(
-        2,
-        "0"
-      )}-${String(inputDay).padStart(2, "0")} ${time}`,
-      count: results.length,
-      files: results,
-      coords,
+      location: `lat=${lat}, lon=${lon}`,
+      years_used: results.length,
+      average_precipitation_mm_per_hr: avg.toFixed(4),
+      rain_probability_percent: rainProb.toFixed(1),
+      rain_intensity_category: category,
+      details: results,
     });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Internal Server Error" });
+  } catch (err) {
+    console.error("💥 ERROR in /calculate_prob:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-export { router as calcRouter, formatTime };
+export { router as calcRouter };
