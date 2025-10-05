@@ -9,7 +9,7 @@ import SearchReturnPage from './components/SearchReturnPage.tsx'
 
 const router = createBrowserRouter([
   { path: '/', element: <SearchPage /> },
-  { path: '/result', element: <SearchReturnPage /> },
+  { path: '/location-data', element: <SearchReturnPage /> },
 ])
 
 createRoot(document.getElementById('root')!).render(
