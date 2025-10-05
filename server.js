@@ -10,7 +10,6 @@ app.get("/", (req, res) => {
   res.send("✅ NASA Space Apps Backend is running");
 });
 
-// 主功能路由
 app.use("/api", calcRouter);
 
 const PORT = 3000;
