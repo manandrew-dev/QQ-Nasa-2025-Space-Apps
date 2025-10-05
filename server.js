@@ -1,8 +1,10 @@
 import express from 'express';
-import { buildURLIndex } from './buildIndex.js';
+import { buildURLIndex } from './buildURLIndex.js';
+import { calcRouter } from './calculations.js';
 
 const app = express();
 app.use(express.json());
+app.use('/api', calcRouter);
 
 const DATA_FILE = `./data/data.txt`;
 await buildURLIndex(DATA_FILE);

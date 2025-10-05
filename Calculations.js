@@ -81,6 +81,7 @@ router.get("/calculate_prob", (req, res) => {
     console.error(error);
     res.status(500).json({ error: "Internal Server Error" });
   }
+  
 });
 
 export { router as calcRouter, formatTime };
