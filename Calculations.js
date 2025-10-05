@@ -2,6 +2,7 @@ import express from "express";
 import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
+import { ChartJSNodeCanvas } from "chartjs-node-canvas";
 
 const router = express.Router();
 
@@ -36,7 +37,6 @@ function formatIMERGDate(date, time, tzone) {
 
   return { utcMonth, utcDay, start, end, fileIndex };
 }
-
 
 router.post("/calculate_prob", async (req, res) => {
   try {
@@ -88,15 +88,13 @@ router.post("/calculate_prob", async (req, res) => {
     }
 
     const precipValues = results.map((r) => r.precip);
-
     const rainValues = precipValues.filter((v) => v > 0);
-    
     const rainProb = (rainValues.length / precipValues.length) * 100;
-    
+
     const avg = rainValues.length > 0
       ? rainValues.reduce((a, b) => a + b, 0) / rainValues.length
       : 0;
-    
+
     let category;
     if (avg === 0) {
       category = "no rain";
@@ -107,16 +105,62 @@ router.post("/calculate_prob", async (req, res) => {
     } else {
       category = "heavy rain";
     }
-    
+
+
+    const width = 800;
+    const height = 400;
+    const chartCallback = (ChartJS) => {
+      ChartJS.defaults.font.size = 14;
+    };
+    const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height, chartCallback });
+
+    const labels = results.map(r => r.year);
+    const values = results.map(r => r.precip);
+
+    const config = {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "Precipitation (mm/hr)",
+          data: values,
+          borderColor: "rgba(54, 162, 235, 1)",
+          backgroundColor: "rgba(54, 162, 235, 0.2)",
+          borderWidth: 2,
+          tension: 0.3,
+          fill: true
+        }]
+      },
+      options: {
+        plugins: {
+          title: {
+            display: true,
+            text: `Historical Precipitation (${lat}, ${lon})`
+          },
+          legend: {
+            display: false
+          }
+        },
+        scales: {
+          x: { title: { display: true, text: "Year" } },
+          y: { title: { display: true, text: "mm/hr" }, beginAtZero: true }
+        }
+      }
+    };
+
+    // Base64
+    const imageBuffer = await chartJSNodeCanvas.renderToBuffer(config);
+    const base64Image = `data:image/png;base64,${imageBuffer.toString("base64")}`;
+
 
     res.json({
-      location: `lat=${lat}, lon=${lon}`,
       years_used: results.length,
       average_precipitation_mm_per_hr: avg.toFixed(4),
       rain_probability_percent: rainProb.toFixed(1),
       rain_intensity_category: category,
-      details: results,
+      chart_image_base64: base64Image,
     });
+
   } catch (err) {
     console.error("💥 ERROR in /calculate_prob:", err);
     res.status(500).json({ error: err.message });
