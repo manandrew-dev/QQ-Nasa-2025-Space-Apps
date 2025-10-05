@@ -3,6 +3,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import { ChartJSNodeCanvas } from "chartjs-node-canvas";
+import fetch from "node-fetch"; // ✅ 新增，用于请求 BigDataCloud API
 
 const router = express.Router();
 
@@ -17,6 +18,28 @@ console.log("✅ Project root:", PROJECT_ROOT);
 console.log("✅ Python script path:", PY_SCRIPT);
 console.log("✅ Data directory:", DATA_DIR);
 
+// ============================================================
+// 🧭 使用 BigDataCloud API 获取国家名称
+// ============================================================
+async function getCountryFromCoords(lat, lon) {
+  try {
+    const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=en`;
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (data && data.countryName) {
+      return data.countryName;
+    }
+    return null;
+  } catch (err) {
+    console.error("❌ Reverse geocode failed:", err);
+    return null;
+  }
+}
+
+// ============================================================
+// 🕒 格式化 IMERG 文件日期
+// ============================================================
 function formatIMERGDate(date, time, tzone) {
   const [year, month, day] = date.split("-").map(Number);
   const [hour, minute] = time.split(":").map(Number);
@@ -38,6 +61,9 @@ function formatIMERGDate(date, time, tzone) {
   return { utcMonth, utcDay, start, end, fileIndex };
 }
 
+// ============================================================
+// 🚀 主路由：计算降水概率或机器学习预测
+// ============================================================
 router.post("/calculate_prob", async (req, res) => {
   try {
     const { coords, date, time, tzone } = req.body;
@@ -46,8 +72,63 @@ router.post("/calculate_prob", async (req, res) => {
     }
 
     const [lat, lon] = coords;
-    const { utcMonth, utcDay, start, end, fileIndex } = formatIMERGDate(date, time, tzone);
+    // 🌏 Step 1: 使用 BigDataCloud 判断国家
+    const country = await getCountryFromCoords(lat, lon);
+    console.log("🌍 Detected country:", country);
 
+    // 🇦🇺 Step 2: 如果在澳大利亚，调用机器学习模型
+    if (country && country.toLowerCase() === "australia") {
+      console.log("🇦🇺 Using ML model (rand_forest.py) for Australian location");
+
+      const PY_ML = path.join(PROJECT_ROOT, "model", "rand_forest.py");
+      const python = spawn("python3", [PY_ML, lat, lon]);
+
+      let output = "";
+      python.stdout.on("data", (data) => (output += data.toString()));
+      let errorOutput = "";
+      python.stderr.on("data", (data) => (errorOutput += data.toString()));
+
+      await new Promise((resolve) => python.on("close", resolve));
+
+      if (errorOutput.trim()) {
+        console.warn("[WARN] ML stderr:", errorOutput.trim());
+      }
+
+      try {
+        // 🧹 清理 Python 输出：只取最可能是 JSON 的部分
+        const possibleJSON = output
+          .split("\n")
+          .filter(line => line.trim().startsWith("{") && line.trim().endsWith("}"));
+      
+        // 如果没找到 JSON 行，就输出原始数据帮助调试
+        if (possibleJSON.length === 0) {
+          console.log("No JSON found in Python output. Raw output:");
+          console.log(output);
+        }
+      
+        const cleanedOutput = possibleJSON.length > 0 ? possibleJSON[possibleJSON.length - 1] : "{}";
+        const result = JSON.parse(cleanedOutput);
+      
+        console.log("✅ Parsed ML result:", result);
+      
+        // 🔁 确保字段存在，防止 undefined
+        return res.json({
+          source: "machine_learning",
+          location: result.location || "Unknown",
+          prediction: result.prediction || "N/A",
+          confidence: result.confidence ?? 0,
+        });
+      
+      } catch (err) {
+        console.error("❌ ML model parse error:", err);
+        console.log("🔍 Raw Python output:\n", output);
+        return res.status(500).json({ error: "Failed to parse ML output" });
+      }
+      
+    }
+
+    // 🌎 Step 3: 否则执行 NASA 历史数据统计
+    const { utcMonth, utcDay, start, end, fileIndex } = formatIMERGDate(date, time, tzone);
     const baseName = `3B-HHR.MS.MRG.3IMERG`;
     const version = `V07B.HDF5`;
     const results = [];
@@ -87,26 +168,21 @@ router.post("/calculate_prob", async (req, res) => {
       return res.json({ message: "No valid data found for this location/time" });
     }
 
+    // 📊 Step 4: 计算统计指标
     const precipValues = results.map((r) => r.precip);
     const rainValues = precipValues.filter((v) => v > 0);
     const rainProb = (rainValues.length / precipValues.length) * 100;
-
     const avg = rainValues.length > 0
       ? rainValues.reduce((a, b) => a + b, 0) / rainValues.length
       : 0;
 
     let category;
-    if (avg === 0) {
-      category = "no rain";
-    } else if (avg < 2.5) {
-      category = "light rain";
-    } else if (avg < 10) {
-      category = "moderate rain";
-    } else {
-      category = "heavy rain";
-    }
+    if (avg === 0) category = "no rain";
+    else if (avg < 2.5) category = "light rain";
+    else if (avg < 10) category = "moderate rain";
+    else category = "heavy rain";
 
-
+    // 📈 Step 5: 绘制趋势图
     const width = 800;
     const height = 400;
     const chartCallback = (ChartJS) => {
@@ -114,8 +190,8 @@ router.post("/calculate_prob", async (req, res) => {
     };
     const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height, chartCallback });
 
-    const labels = results.map(r => r.year);
-    const values = results.map(r => r.precip);
+    const labels = results.map((r) => r.year);
+    const values = results.map((r) => r.precip);
 
     const config = {
       type: "line",
@@ -137,9 +213,7 @@ router.post("/calculate_prob", async (req, res) => {
             display: true,
             text: `Historical Precipitation (${lat}, ${lon})`
           },
-          legend: {
-            display: false
-          }
+          legend: { display: false }
         },
         scales: {
           x: { title: { display: true, text: "Year" } },
@@ -148,12 +222,12 @@ router.post("/calculate_prob", async (req, res) => {
       }
     };
 
-    // Base64
     const imageBuffer = await chartJSNodeCanvas.renderToBuffer(config);
     const base64Image = `data:image/png;base64,${imageBuffer.toString("base64")}`;
 
-
+    // ✅ 返回结果
     res.json({
+      source: "nasa_imerg",
       years_used: results.length,
       average_precipitation_mm_per_hr: avg.toFixed(4),
       rain_probability_percent: rainProb.toFixed(1),
