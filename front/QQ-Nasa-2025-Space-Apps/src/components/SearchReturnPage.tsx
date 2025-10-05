@@ -1,12 +1,13 @@
 import {useState, useEffect} from 'react';
-import '../styles/Index.css';
+import '../styles/index.css';
 import MapIcon from '@mui/icons-material/Map';
 
 function SearchReturnPage() {
 
     interface LocationTimeData {
-        location: string;
-        time: string;
+        lat: number;
+        lng: number;
+
     }
 
   const [data, setData] = useState<LocationTimeData>({

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   MapContainer,
   TileLayer,
@@ -9,10 +10,6 @@ import {
 } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-
-import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
-import markerIcon from 'leaflet/dist/images/marker-icon.png';
-import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 
 const defaultIcon = new L.Icon({
   iconUrl: new URL('leaflet/dist/images/marker-icon.png', import.meta.url).toString(),
@@ -70,6 +67,8 @@ export default function ClickableMap({
     () => (controlled ? selected! : internalSel),
     [controlled, selected, internalSel]
   );
+
+  const navigate = useNavigate();
 
   const markerRef = useRef<L.Marker | null>(null);
 
@@ -156,6 +155,25 @@ export default function ClickableMap({
                     className="rounded border px-2 py-1"
                   />
                 </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!shown?.when) {
+                      alert("Please select a date/time first.");
+                      return;
+                    }
+                    navigate("/location-data", {
+                      state: {
+                        lat: shown.lat,
+                        lng: shown.lng,
+                        when: shown.when,
+                      },
+                    });
+                  }}
+                  className="rounded bg-green-600 px-3 py-1 text-white hover:bg-green-700"
+                >
+                  Submit
+                </button>
 
                 {!liveUpdate && (
                   <button
