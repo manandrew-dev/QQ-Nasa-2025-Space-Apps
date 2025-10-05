@@ -1,8 +1,8 @@
-import ClickableMap from "./components/ClickableMap";
+import SearchPage from "./components/SearchPage";
 // src/App.js
 function App() {
   return (
-    <ClickableMap/>
+    <SearchPage/>
   );
 }
 
